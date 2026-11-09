@@ -388,6 +388,7 @@ if command -v logrotate >/dev/null 2>&1; then
   mkdir -p /etc/logrotate.d
   cat > /etc/logrotate.d/sing-box <<EOF
 ${LOGFILE} {
+    su root root
     size 5M
     rotate 2
     missingok
