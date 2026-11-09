@@ -21,7 +21,8 @@
 #   - 最后打印 TUIC/HY2 链接、base64 订阅、Clash YAML，并存一份到 /etc/sing-box/
 # ==============================================================================
 
-PORT=23523
+PORT=23523        # ← 想写死端口就改这里（改完不用带参数）
+PORT_SET=0        # 0=没指定，脚本会交互式问一句；带了参数则置 1
 HY2=0
 HY2_PORT=
 DOMAIN=
@@ -40,7 +41,8 @@ usage() {
   cat <<'HLP'
 用法: sh tuic-onekey.sh [端口] [选项]
 
-  --port N          TUIC 端口（也可直接写数字作为第一个参数），默认 23523
+  --port N          TUIC 端口（也可直接写数字作为第一个参数）
+                    不带端口参数时，脚本会交互式问一句；默认 23523
   --hy2             同时开 Hysteria2
   --hy2-port N      Hysteria2 端口，默认 = TUIC 端口 + 1
   --domain D        使用域名作为 SNI（配合 --acme 申请真证书）
@@ -56,7 +58,7 @@ HLP
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --port)      shift; PORT="$1" ;;
+    --port)      shift; PORT="$1";  PORT_SET=1 ;;
     --hy2)       HY2=1 ;;
     --hy2-port)  shift; HY2_PORT="$1" ;;
     --domain)    shift; DOMAIN="$1" ;;
@@ -68,7 +70,7 @@ while [ $# -gt 0 ]; do
     --uninstall) UNINSTALL=1 ;;
     --)          shift ;;
     -h|--help)   usage; exit 0 ;;
-    [0-9]*)      PORT="$1" ;;
+    [0-9]*)      PORT="$1"; PORT_SET=1 ;;
     *)           echo "未知参数: $1"; usage; exit 1 ;;
   esac
   shift
@@ -113,6 +115,27 @@ if [ "$UNINSTALL" = "1" ]; then
   echo "已卸载。"
   exit 0
 fi
+
+# ---------------------------------------------------------------- 端口（自定义/交互）
+# 没带端口参数时，交互式问一句；管道执行（curl|sh）没有终端则直接用默认值
+if [ "$PORT_SET" = "0" ]; then
+  echo "当前默认端口: $PORT（面板上给 TUIC 的那个 UDP 端口）"
+  if [ -r /dev/tty ]; then
+    printf "请输入端口（直接回车沿用 %s）: " "$PORT"
+    read pin < /dev/tty 2>/dev/null || pin=""
+    if [ -n "$pin" ]; then
+      PORT="$pin"
+    fi
+  fi
+fi
+
+case "$PORT" in
+  ''|*[!0-9]*) echo "端口必须是纯数字，收到: $PORT"; exit 1 ;;
+esac
+if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  echo "端口必须在 1-65535，收到: $PORT"; exit 1
+fi
+echo "使用端口: $PORT"
 
 # ---------------------------------------------------------------- 依赖
 install_pkgs() {
