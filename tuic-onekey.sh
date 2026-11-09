@@ -35,6 +35,7 @@ UNINSTALL=0
 DIR=/etc/sing-box
 CERTDIR=$DIR/tls
 ACCT=$DIR/account.env
+LOGFILE=/var/log/sing-box.log
 VER=${SINGBOX_VER:-1.11.15}
 
 usage() {
@@ -319,7 +320,7 @@ EOF
 
 [ -f "$DIR/config.json" ] && cp "$DIR/config.json" "$DIR/config.json.bak"
 {
-  printf '{\n  "log": { "level": "warn", "timestamp": true },\n  "inbounds": [\n'
+  printf '{\n  "log": { "level": "warn", "output": "%s", "timestamp": true },\n  "inbounds": [\n' "${LOGFILE}"
   printf '%s\n' "$TUIC_JSON"
   [ "$HY2" = "1" ] && printf ',\n%s\n' "$HY2_JSON"
   printf '  ],\n  "outbounds": [{ "type": "direct" }]\n}\n'
@@ -349,8 +350,8 @@ command_background=true
 pidfile="/run/\${RC_SVCNAME}.pid"
 export GOMEMLIMIT="${GMEM}MiB"
 export GOGC="40"
-output_log="/var/log/sing-box.log"
-error_log="/var/log/sing-box.log"
+output_log="${LOGFILE}"
+error_log="${LOGFILE}"
 EOF
   chmod +x /etc/init.d/sing-box
   rc-update add sing-box default >/dev/null 2>&1 || true
@@ -377,6 +378,46 @@ EOF
   systemctl restart sing-box
 else
   echo "      未识别 init，手动启动: nohup sing-box run -c $DIR/config.json &"
+fi
+
+# ---------------------------------------------------------------- 日志轮转
+# 按大小轮转（>5M 才切），保留 2 份压缩旧档 → 代理日志最多约 10M
+echo "[6.5/7] 配置日志轮转"
+install_pkgs logrotate
+if command -v logrotate >/dev/null 2>&1; then
+  mkdir -p /etc/logrotate.d
+  cat > /etc/logrotate.d/sing-box <<EOF
+${LOGFILE} {
+    size 5M
+    rotate 2
+    missingok
+    notifempty
+    copytruncate
+    compress
+    delaycompress
+}
+EOF
+  # Alpine 的 logrotate 要靠 crond 触发，Debian 系默认已有 cron.daily/logrotate
+  if [ "$INIT" = "openrc" ]; then
+    mkdir -p /etc/periodic/daily
+    ln -sf /usr/bin/logrotate /etc/periodic/daily/logrotate 2>/dev/null || true
+    rc-update add crond default >/dev/null 2>&1 || true
+    rc-service crond start >/dev/null 2>&1 || true
+  fi
+  echo "      已写入 /etc/logrotate.d/sing-box (5M x 2)"
+else
+  echo "      logrotate 装不上，跳过（日志增长很慢，可忽略）"
+fi
+
+# ---------------------------------------------------------------- 限制系统日志
+if [ "$INIT" = "systemd" ]; then
+  mkdir -p /etc/systemd/journald.conf.d
+  cat > /etc/systemd/journald.conf.d/99-size.conf <<'EOF'
+SystemMaxUse=32M
+SystemKeepFree=64M
+EOF
+  systemctl restart systemd-journald >/dev/null 2>&1 || true
+  echo "      journald 上限已设为 32M"
 fi
 
 sleep 2
